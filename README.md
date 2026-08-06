@@ -1,67 +1,101 @@
-# Шаблонный репозиторий для сервиса "Аватарница"
+# GophProfile — сервис аватарок
 
-Это шаблонный репозиторий для выпускной работы по курсу "Go-разработчик". Он содержит базовую структуру проекта, готовую к дальнейшей разработке, а также техническое задание и пример веб-интерфейса.
+Микросервис для загрузки, хранения и раздачи аватарок пользователей.
+Оригиналы лежат в S3-совместимом хранилище, метаданные — в PostgreSQL,
+миниатюры создаются асинхронно воркером через Kafka.
 
-## Описание
+## Стек
 
-Проект "Аватарница" — это микросервис для управления аватарками пользователей. Он предоставляет REST API для загрузки, получения и удаления изображений, а также простой веб-интерфейс для взаимодействия с сервисом.
+| Компонент | Решение |
+|---|---|
+| HTTP-роутинг | chi/v5 |
+| База данных | PostgreSQL + pgx (через `database/sql`) |
+| Миграции | goose, встроены в бинарник |
+| Хранилище файлов | MinIO / S3 (minio-go) |
+| Брокер сообщений | Kafka в режиме KRaft (franz-go) |
+| Обработка изображений | disintegration/imaging |
+| Логи | zap |
+| Тесты | testify + go.uber.org/mock + go-sqlmock |
 
-## Структура проекта
+## Быстрый старт
 
-Проект имеет следующую структуру, основанную на лучших практиках разработки на Go:
+Все окружение в контейнерах:
 
-```
-/
-├── cmd/                # Точки входа в приложение (main.go)
-│   ├── server/         # HTTP-сервер
-│   └── worker/         # Воркер для асинхронной обработки задач
-├── internal/           # Внутренняя логика приложения
-│   ├── api/            # Спецификации API (OpenAPI/Swagger)
-│   ├── config/         # Конфигурация приложения
-│   ├── domain/         # Основные доменные сущности
-│   ├── handlers/       # HTTP-обработчики
-│   ├── repository/     # Работа с хранилищем (БД, S3)
-│   ├── services/       # Бизнес-логика
-│   └── worker/         # Логика воркера
-├── pkg/                # Публичные библиотеки, которые можно использовать в других проектах
-├── web/                # Веб-интерфейс
-│   └── static/         # Статические файлы (HTML, CSS, JS)
-├── migrations/         # Миграции базы данных
-├── docker/             # Docker-файлы и конфигурации
-├── k8s/                # Манифесты Kubernetes
-├── tests/              # Интеграционные и e2e тесты
-├── docs/               # Документация проекта
-└── .gitignore          # Файл для исключения файлов из Git
+```sh
+make up      # postgres + minio + kafka + server + worker
+make down
 ```
 
-## Как начать работу
+Сервис поднимется на `http://localhost:8080`, веб-интерфейс — там же.
+Консоль MinIO — `http://localhost:9001` (minioadmin / minioadmin).
 
-1.  **Клонируйте репозиторий:**
-    ```bash
-    git clone <URL этого репозитория>
-    cd go-avatar-service-template
-    ```
+Локальная разработка (инфраструктура в Docker, приложение — на хосте):
 
-2.  **Инициализируйте свой репозиторий на GitHub:**
-    Следуйте инструкциям GitHub для создания нового репозитория и свяжите его с этим локальным репозиторием.
+```sh
+make infra-up
+make run           # HTTP-сервер
+make run-worker    # воркер, в отдельном терминале
+```
 
-3.  **Установите зависимости:**
-    ```bash
-    go mod tidy
-    ```
+Миграции применяются автоматически при старте сервера и воркера.
 
-4.  **Настройте окружение:**
-    Создайте файл `.env` на основе `.env.example` (необходимо будет его создать) и укажите необходимые переменные окружения (данные для подключения к БД, S3 и т.д.).
+## API
 
-5.  **Запустите сервисы с помощью Docker Compose:**
-    ```bash
-    docker-compose up --build
-    ```
+| Метод | Путь | Описание |
+|---|---|---|
+| POST | `/api/v1/avatars` | загрузка аватарки, `multipart/form-data`, поле `file`, заголовок `X-User-ID` |
+| GET | `/api/v1/avatars/{avatar_id}` | получение изображения, `?size=100x100\|300x300\|original` |
+| GET | `/api/v1/avatars/{avatar_id}/metadata` | метаданные аватарки |
+| DELETE | `/api/v1/avatars/{avatar_id}` | удаление, требует `X-User-ID` владельца |
+| GET | `/api/v1/users/{user_id}/avatar` | последняя загруженная аватарка пользователя |
+| DELETE | `/api/v1/users/{user_id}/avatar` | удаление последней аватарки пользователя |
+| GET | `/api/v1/users/{user_id}/avatars` | список аватарок пользователя |
+| GET | `/health` | состояние сервиса, БД, S3 и брокера |
+| GET | `/web/upload` | страница с формой загрузки |
+| POST | `/web/upload` | отправка формы: поля `userId` и `file`, редирект в галерею |
+| GET | `/web/gallery/{user_id}` | галерея аватарок пользователя |
+| GET | `/*` | веб-интерфейс из `web/static` |
 
-После этого сервис будет доступен по адресу `http://localhost:8080`.
 
-## Веб-интерфейс
+Пример:
 
-Простой одностраничный веб-интерфейс для загрузки аватарок доступен по адресу `http://localhost:8080/`. Он находится в файле `web/static/index.html`.
+```sh
+curl -X POST localhost:8080/api/v1/avatars -H "X-User-ID: user-1" -F "file=@photo.png"
+curl "localhost:8080/api/v1/avatars/<id>?size=300x300" -o thumb.jpg
+curl -X DELETE localhost:8080/api/v1/avatars/<id> -H "X-User-ID: user-1"
+```
 
-**Важно:** Этот интерфейс предоставлен для облегчения старта и демонстрации работы API. Вы можете изменять его, адаптировать под свои нужды или полностью заменить на свой собственный фронтенд.
+## Конфигурация
+
+Переменные окружения (приоритетнее флагов CLI):
+
+| Переменная | Флаг | По умолчанию |
+|---|---|---|
+| `RUN_ADDRESS` | `-a` | `:8080` |
+| `DATABASE_URI` | `-d` | `postgres://gophprofile:gophprofile@localhost:5432/gophprofile?sslmode=disable` |
+| `LOG_LEVEL` | `-l` | `info` |
+| `STATIC_DIR` | `--static` | `web/static` |
+| `MAX_UPLOAD_SIZE` | `--max-upload-size` | `10485760` |
+| `S3_ENDPOINT` | `--s3-endpoint` | `localhost:9000` |
+| `S3_ACCESS_KEY` | `--s3-access-key` | `minioadmin` |
+| `S3_SECRET_KEY` | `--s3-secret-key` | `minioadmin` |
+| `S3_BUCKET` | `--s3-bucket` | `avatars` |
+| `S3_USE_SSL` | `--s3-use-ssl` | `false` |
+| `KAFKA_BROKERS` | `--kafka-brokers` | `localhost:9092` |
+| `KAFKA_TOPIC` | `--kafka-topic` | `avatar-events` |
+| `KAFKA_GROUP_ID` | `--kafka-group` | `avatar-worker` |
+
+## Разработка
+
+```sh
+make test          # тесты
+make cover         # покрытие
+make generate      # перегенерировать моки
+make lint          # golangci-lint
+make fmt           # golangci-lint fmt: gofmt + goimports
+make vet           # go vet
+make build         # бинарники в bin/
+make install-lint  # поставить golangci-lint нужной версии
+```
+
+

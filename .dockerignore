@@ -1,0 +1,22 @@
+.git
+.gitignore
+.github
+.idea
+.vscode
+.claude
+
+bin
+
+# Результаты тестов и покрытия.
+*.out
+*.test
+coverage.out
+
+deployments
+Dockerfile
+.dockerignore
+Makefile
+.golangci.yml
+
+*.md
+LICENSE
