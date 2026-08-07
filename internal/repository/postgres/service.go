@@ -17,16 +17,15 @@ func NewStorage() *Storage {
 	return &Storage{}
 }
 
-func (s *Storage) Start(ctx context.Context, dsn string) (err error) {
+func (s *Storage) Start(ctx context.Context, dsn string) error {
 	classifier := newPostgresErrorClassifier()
 
-	err = withRetry(func() error {
-		s.db, err = sql.Open("pgx", dsn)
-		return err
-	}, classifier)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("postgres.Start Open: %w", err)
 	}
+
+	s.db = db
 
 	err = withRetry(func() error { return s.db.PingContext(ctx) }, classifier)
 	if err != nil {

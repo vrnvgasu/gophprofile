@@ -29,16 +29,27 @@ func JSON(w http.ResponseWriter, code int, payload any) {
 	}
 }
 
+var statusCodes = map[error]int{
+	avatar.ErrInvalidInput:      http.StatusBadRequest,
+	avatar.ErrUnauthorized:      http.StatusUnauthorized,
+	avatar.ErrForbidden:         http.StatusForbidden,
+	avatar.ErrNotFound:          http.StatusNotFound,
+	avatar.ErrTooLarge:          http.StatusRequestEntityTooLarge,
+	avatar.ErrUnsupportedFormat: http.StatusBadRequest,
+}
+
 func ResponseError(w http.ResponseWriter, r *http.Request, err error) {
 	var serviceErr *avatar.ServiceError
 	if errors.As(err, &serviceErr) {
-		JSON(w, serviceErr.HTTPCode, Error{
-			Error:   serviceErr.Message,
-			Details: serviceErr.Details,
-			MaxSize: serviceErr.MaxSize,
-		})
+		if code, ok := statusCodes[serviceErr.Kind]; ok {
+			JSON(w, code, Error{
+				Error:   serviceErr.Message,
+				Details: serviceErr.Details,
+				MaxSize: serviceErr.MaxSize,
+			})
 
-		return
+			return
+		}
 	}
 
 	LogError(r, err)

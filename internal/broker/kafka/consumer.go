@@ -51,29 +51,50 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) {
 			}
 		})
 
-		fetches.EachRecord(func(record *kgo.Record) {
-			c.handleRecord(ctx, handler, record)
+		var processed []*kgo.Record
+
+		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
+			processed = append(processed, processPartition(ctx, handler, partition.Records)...)
 		})
 
-		if err := c.client.CommitUncommittedOffsets(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if len(processed) == 0 {
+			continue
+		}
+
+		if err := c.client.CommitRecords(ctx, processed...); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Errorw("kafka.Run commit", "error", err)
 		}
 	}
 }
 
-func (c *Consumer) handleRecord(ctx context.Context, handler Handler, record *kgo.Record) {
+// processPartition обрабатывает записи партиции по порядку и возвращает префикс, который можно коммитить.
+func processPartition(ctx context.Context, handler Handler, records []*kgo.Record) []*kgo.Record {
+	for i, record := range records {
+		if err := handleRecord(ctx, handler, record); err != nil {
+			return records[:i]
+		}
+	}
+
+	return records
+}
+
+func handleRecord(ctx context.Context, handler Handler, record *kgo.Record) error {
 	var event model.Event
 	if err := json.Unmarshal(record.Value, &event); err != nil {
-		// Битое сообщение не повторяем.
 		logger.Log.Errorw("kafka.handleRecord Unmarshal",
 			"offset", record.Offset, "error", err)
-		return
+
+		return nil
 	}
 
 	if err := handler(ctx, event); err != nil {
 		logger.Log.Errorw("kafka.handleRecord handler",
-			"event_id", event.ID, "type", event.Type, "error", err)
+			"event_id", event.ID, "type", event.Type, "offset", record.Offset, "error", err)
+
+		return err
 	}
+
+	return nil
 }
 
 func (c *Consumer) Close() {

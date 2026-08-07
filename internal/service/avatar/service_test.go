@@ -8,7 +8,6 @@ import (
 	"image/color"
 	"image/png"
 	"io"
-	"net/http"
 	"testing"
 	"time"
 
@@ -69,15 +68,6 @@ func newDeps(t *testing.T, maxSize int64) *deps {
 	}
 }
 
-func serviceErrorCode(t *testing.T, err error) int {
-	t.Helper()
-
-	var serviceErr *ServiceError
-	require.ErrorAs(t, err, &serviceErr)
-
-	return serviceErr.HTTPCode
-}
-
 func TestUpload(t *testing.T) {
 	t.Parallel()
 
@@ -121,7 +111,7 @@ func TestUpload(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		_, err := d.service.Upload(context.Background(), "", "photo.png", image)
-		assert.Equal(t, http.StatusUnauthorized, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrUnauthorized)
 	})
 
 	t.Run("Empty file", func(t *testing.T) {
@@ -130,7 +120,7 @@ func TestUpload(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		_, err := d.service.Upload(context.Background(), "user-1", "photo.png", nil)
-		assert.Equal(t, http.StatusBadRequest, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrInvalidInput)
 	})
 
 	t.Run("File too large", func(t *testing.T) {
@@ -139,7 +129,7 @@ func TestUpload(t *testing.T) {
 		d := newDeps(t, 10)
 
 		_, err := d.service.Upload(context.Background(), "user-1", "photo.png", image)
-		assert.Equal(t, http.StatusRequestEntityTooLarge, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrTooLarge)
 	})
 
 	t.Run("Unsupported format", func(t *testing.T) {
@@ -148,7 +138,7 @@ func TestUpload(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		_, err := d.service.Upload(context.Background(), "user-1", "notes.txt", []byte("plain text"))
-		assert.Equal(t, http.StatusBadRequest, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrUnsupportedFormat)
 	})
 
 	t.Run("Storage failure removes uploaded object", func(t *testing.T) {
@@ -250,7 +240,7 @@ func TestDownload(t *testing.T) {
 		d.storage.EXPECT().GetAvatar(gomock.Any(), testMissingID).Return(nil, repository.ErrNotFound)
 
 		_, err := d.service.Download(context.Background(), testMissingID, "")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Malformed id", func(t *testing.T) {
@@ -259,7 +249,7 @@ func TestDownload(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		_, err := d.service.Download(context.Background(), "not-a-uuid", "")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Object is missing in storage", func(t *testing.T) {
@@ -270,7 +260,7 @@ func TestDownload(t *testing.T) {
 		d.objects.EXPECT().Get(gomock.Any(), stored.S3Key).Return(nil, s3.ErrNotFound)
 
 		_, err := d.service.Download(context.Background(), testAvatarID, "")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 }
 
@@ -301,7 +291,7 @@ func TestDownloadUserAvatar(t *testing.T) {
 		d.storage.EXPECT().GetLastUserAvatar(gomock.Any(), "user-1").Return(nil, repository.ErrNotFound)
 
 		_, err := d.service.DownloadUserAvatar(context.Background(), "user-1", "")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 }
 
@@ -328,7 +318,7 @@ func TestMetadataAndList(t *testing.T) {
 		d.storage.EXPECT().GetAvatar(gomock.Any(), testMissingID).Return(nil, repository.ErrNotFound)
 
 		_, err := d.service.Metadata(context.Background(), testMissingID)
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Metadata with a malformed id", func(t *testing.T) {
@@ -337,7 +327,7 @@ func TestMetadataAndList(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		_, err := d.service.Metadata(context.Background(), "not-a-uuid")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("List", func(t *testing.T) {
@@ -397,7 +387,7 @@ func TestDelete(t *testing.T) {
 		d.storage.EXPECT().GetAvatar(gomock.Any(), testAvatarID).Return(stored, nil)
 
 		err := d.service.Delete(context.Background(), testAvatarID, "user-2")
-		assert.Equal(t, http.StatusForbidden, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrForbidden)
 	})
 
 	t.Run("Without user id", func(t *testing.T) {
@@ -406,7 +396,7 @@ func TestDelete(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		err := d.service.Delete(context.Background(), testAvatarID, "")
-		assert.Equal(t, http.StatusUnauthorized, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrUnauthorized)
 	})
 
 	t.Run("Not found", func(t *testing.T) {
@@ -416,7 +406,7 @@ func TestDelete(t *testing.T) {
 		d.storage.EXPECT().GetAvatar(gomock.Any(), testMissingID).Return(nil, repository.ErrNotFound)
 
 		err := d.service.Delete(context.Background(), testMissingID, "user-1")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Malformed id", func(t *testing.T) {
@@ -425,7 +415,7 @@ func TestDelete(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		err := d.service.Delete(context.Background(), "not-a-uuid", "user-1")
-		assert.Equal(t, http.StatusNotFound, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 }
 
@@ -452,7 +442,7 @@ func TestDeleteUserAvatar(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		err := d.service.DeleteUserAvatar(context.Background(), "user-1", "user-2")
-		assert.Equal(t, http.StatusForbidden, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrForbidden)
 	})
 
 	t.Run("Without user id", func(t *testing.T) {
@@ -461,7 +451,7 @@ func TestDeleteUserAvatar(t *testing.T) {
 		d := newDeps(t, maxUploadSize)
 
 		err := d.service.DeleteUserAvatar(context.Background(), "user-1", "")
-		assert.Equal(t, http.StatusUnauthorized, serviceErrorCode(t, err))
+		assert.ErrorIs(t, err, ErrUnauthorized)
 	})
 }
 
