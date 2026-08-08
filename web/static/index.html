@@ -80,6 +80,18 @@
 
         <div id="errorMessage" class="hidden bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-3 rounded-lg">
         </div>
+
+        <div class="border-t border-white/20 pt-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-semibold text-white">Gallery</h2>
+            <button type="button" id="refreshGalleryBtn"
+              class="bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-medium py-2 px-4 rounded-lg transition-all">
+              Refresh
+            </button>
+          </div>
+          <p id="galleryHint" class="text-white/60 text-sm">Enter a user ID to see their avatars.</p>
+          <div id="gallery" class="grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
+        </div>
       </main>
     </div>
   </div>
@@ -127,7 +139,7 @@
       hideResponse();
 
       const formData = new FormData();
-      formData.append('image', imageFile);
+      formData.append('file', imageFile);
 
       try {
         const response = await fetch('/api/v1/avatars', {
@@ -148,6 +160,12 @@
         }
 
         displayResponse(response, parsedData);
+
+        if (response.ok) {
+          // Миниатюры создаются асинхронно, поэтому обновляем галерею с задержкой.
+          loadGallery(userId);
+          setTimeout(() => loadGallery(userId), 1500);
+        }
 
       } catch (error) {
         showError(`Network error: ${error.message}`);
@@ -201,6 +219,95 @@
 
     function hideResponse() {
       responseContainer.classList.add('hidden');
+    }
+
+    const gallery = document.getElementById('gallery');
+    const galleryHint = document.getElementById('galleryHint');
+    const refreshGalleryBtn = document.getElementById('refreshGalleryBtn');
+
+    refreshGalleryBtn.addEventListener('click', function () {
+      loadGallery(document.getElementById('userId').value);
+    });
+
+    async function loadGallery(userId) {
+      if (!userId) {
+        galleryHint.textContent = 'Enter a user ID to see their avatars.';
+        galleryHint.classList.remove('hidden');
+        gallery.innerHTML = '';
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/v1/users/${encodeURIComponent(userId)}/avatars`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        renderGallery(await response.json(), userId);
+      } catch (error) {
+        gallery.innerHTML = '';
+        galleryHint.textContent = `Could not load the gallery: ${error.message}`;
+        galleryHint.classList.remove('hidden');
+      }
+    }
+
+    function renderGallery(avatars, userId) {
+      gallery.innerHTML = '';
+
+      if (!avatars.length) {
+        galleryHint.textContent = 'This user has no avatars yet.';
+        galleryHint.classList.remove('hidden');
+        return;
+      }
+
+      galleryHint.classList.add('hidden');
+
+      for (const avatar of avatars) {
+        // Пока миниатюра не готова, показываем оригинал.
+        const ready = avatar.status === 'completed';
+        const src = ready ? `${avatar.url}?size=300x300` : avatar.url;
+
+        const card = document.createElement('div');
+        card.className = 'bg-white/10 border border-white/20 rounded-lg overflow-hidden';
+        card.innerHTML = `
+          <img src="${src}" alt="${avatar.file_name}" class="w-full h-32 object-cover">
+          <div class="p-3 space-y-2">
+            <p class="text-white/80 text-xs truncate" title="${avatar.file_name}">${avatar.file_name}</p>
+            <p class="text-white/50 text-xs">${avatar.dimensions.width}x${avatar.dimensions.height} · ${avatar.status}</p>
+            <button type="button"
+              class="w-full bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 text-red-100 text-xs py-1.5 rounded transition-all">
+              Delete
+            </button>
+          </div>`;
+
+        card.querySelector('button').addEventListener('click', () => deleteAvatar(avatar.id, userId));
+        gallery.appendChild(card);
+      }
+    }
+
+    async function deleteAvatar(avatarId, userId) {
+      try {
+        const response = await fetch(`/api/v1/avatars/${encodeURIComponent(avatarId)}`, {
+          method: 'DELETE',
+          headers: { 'X-User-ID': userId }
+        });
+
+        if (!response.ok && response.status !== 204) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        loadGallery(userId);
+      } catch (error) {
+        showError(`Could not delete the avatar: ${error.message}`);
+      }
+    }
+
+    // Прямой заход на /web/gallery/{user_id} сразу открывает галерею этого пользователя.
+    const galleryRoute = window.location.pathname.match(/^\/web\/gallery\/([^/]+)\/?$/);
+    if (galleryRoute) {
+      const userIdFromPath = decodeURIComponent(galleryRoute[1]);
+      document.getElementById('userId').value = userIdFromPath;
+      loadGallery(userIdFromPath);
     }
   </script>
 </body>
