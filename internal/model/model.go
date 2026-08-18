@@ -59,3 +59,8 @@ func (a *Avatar) AllS3Keys() []string {
 
 	return keys
 }
+
+type Stats struct {
+	TotalBytes         int64
+	ByProcessingStatus map[string]int64
+}

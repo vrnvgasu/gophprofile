@@ -13,28 +13,55 @@ import (
 	"github.com/vrnvgasu/gophprofile/internal/broker/kafka"
 	"github.com/vrnvgasu/gophprofile/internal/handler"
 	"github.com/vrnvgasu/gophprofile/internal/logger"
+	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/repository/postgres"
 	"github.com/vrnvgasu/gophprofile/internal/service/avatar"
 	"github.com/vrnvgasu/gophprofile/internal/storage/s3"
+	"github.com/vrnvgasu/gophprofile/internal/telemetry"
 )
 
-const shutdownTimeout = 5 * time.Second
+const (
+	shutdownTimeout = 5 * time.Second
+	serviceName     = "gophprofile-server"
+	version         = "1.0.0"
+)
 
 func main() {
 	cfg := parseConfig()
 
-	if err := logger.Initialize(cfg.LogLevel); err != nil {
+	if err := logger.Initialize(cfg.LogLevel, "server"); err != nil {
 		log.Fatalf("logger.Initialize: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	shutdownTelemetry, err := telemetry.Init(ctx, serviceName, version, cfg.OTLPEndpoint, cfg.TraceSampleRate)
+	if err != nil {
+		logger.Fatalf("telemetry.Init: %v", err)
+	}
+
+	logger.AttachOTLP(serviceName)
+
 	storage := postgres.NewStorage()
 	if err := storage.Start(ctx, cfg.DatabaseURI); err != nil {
-		logger.Log.Fatalf("storage.Start: %v", err)
+		logger.Fatalf("storage.Start: %v", err)
 	}
 	defer func() { _ = storage.Stop() }()
+
+	defer func() {
+		if err := shutdownTelemetry(context.Background()); err != nil {
+			logger.Log.Error("telemetry shutdown", "error", err)
+		}
+	}()
+
+	if err := metrics.RegisterDBStats(storage.DB(), "gophprofile"); err != nil {
+		logger.Fatalf("metrics.RegisterDBStats: %v", err)
+	}
+
+	if err := metrics.RegisterStats(storage); err != nil {
+		logger.Fatalf("metrics.RegisterStats: %v", err)
+	}
 
 	objects, err := s3.NewStorage(ctx, s3.Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -44,12 +71,12 @@ func main() {
 		UseSSL:    cfg.S3UseSSL,
 	})
 	if err != nil {
-		logger.Log.Fatalf("s3.NewStorage: %v", err)
+		logger.Fatalf("s3.NewStorage: %v", err)
 	}
 
 	producer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
 	if err != nil {
-		logger.Log.Fatalf("kafka.NewProducer: %v", err)
+		logger.Fatalf("kafka.NewProducer: %v", err)
 	}
 	defer producer.Close()
 
@@ -64,9 +91,9 @@ func main() {
 	}
 
 	go func() {
-		logger.Log.Infow("starting server", "address", cfg.RunAddress)
+		logger.Log.Info("starting server", "address", cfg.RunAddress)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Log.Fatalf("srv.ListenAndServe: %v", err)
+			logger.Fatalf("srv.ListenAndServe: %v", err)
 		}
 	}()
 
@@ -77,6 +104,6 @@ func main() {
 	defer cancel()
 
 	if err = srv.Shutdown(shutdownCtx); err != nil {
-		logger.Log.Errorw("srv.Shutdown", "error", err)
+		logger.Log.Error("srv.Shutdown", "error", err)
 	}
 }

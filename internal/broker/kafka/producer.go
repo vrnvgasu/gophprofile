@@ -7,7 +7,10 @@ import (
 	"fmt"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
+	"go.opentelemetry.io/otel"
 
+	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/model"
 )
 
@@ -17,10 +20,15 @@ type Producer struct {
 }
 
 func NewProducer(brokers []string, topic string) (*Producer, error) {
+	instr := kotel.NewKotel(kotel.WithTracer(
+		kotel.NewTracer(kotel.TracerProvider(otel.GetTracerProvider())),
+	))
+
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.DefaultProduceTopic(topic),
 		kgo.AllowAutoTopicCreation(),
+		kgo.WithHooks(instr.Hooks()...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka.NewProducer: %w", err)
@@ -31,7 +39,11 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 
 // Publish синхронно отправляет событие. Ключом сообщения служит идентификатор аватарки,
 // поэтому все события одной аватарки попадают в одну партицию и обрабатываются по порядку.
-func (p *Producer) Publish(ctx context.Context, key string, event model.Event) error {
+func (p *Producer) Publish(ctx context.Context, key string, event model.Event) (err error) {
+	defer func() {
+		metrics.RecordEventPublished(ctx, string(event.Type), err)
+	}()
+
 	value, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("kafka.Publish Marshal: %w", err)

@@ -1,0 +1,12 @@
+groups:
+  - name: gophprofile-logs
+    rules:
+      - alert: ErrorLogsBurst
+        expr: |
+          sum(count_over_time({job=~"gophprofile-.*"} | detected_level="error" [5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Всплеск ошибок в логах"
+          description: "За 5 минут более 10 записей уровня ERROR"

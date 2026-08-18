@@ -7,6 +7,11 @@ import (
 	"fmt"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kotel"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vrnvgasu/gophprofile/internal/logger"
 	"github.com/vrnvgasu/gophprofile/internal/model"
@@ -16,9 +21,13 @@ type Handler func(ctx context.Context, event model.Event) error
 
 type Consumer struct {
 	client *kgo.Client
+	tracer *kotel.Tracer
 }
 
 func NewConsumer(brokers []string, topic, groupID string) (*Consumer, error) {
+	tracer := kotel.NewTracer(kotel.TracerProvider(otel.GetTracerProvider()))
+	instr := kotel.NewKotel(kotel.WithTracer(tracer))
+
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(groupID),
@@ -26,12 +35,13 @@ func NewConsumer(brokers []string, topic, groupID string) (*Consumer, error) {
 		// Оффсет коммитится только после успешного возврата из обработчика.
 		kgo.DisableAutoCommit(),
 		kgo.AllowAutoTopicCreation(),
+		kgo.WithHooks(instr.Hooks()...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka.NewConsumer: %w", err)
 	}
 
-	return &Consumer{client: client}, nil
+	return &Consumer{client: client, tracer: tracer}, nil
 }
 
 func (c *Consumer) Run(ctx context.Context, handler Handler) {
@@ -47,14 +57,14 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) {
 
 		fetches.EachError(func(topic string, partition int32, err error) {
 			if !errors.Is(err, context.Canceled) {
-				logger.Log.Errorw("kafka.Run fetch", "topic", topic, "partition", partition, "error", err)
+				logger.WithContext(ctx).Error("kafka.Run fetch", "topic", topic, "partition", partition, "error", err)
 			}
 		})
 
 		var processed []*kgo.Record
 
 		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
-			processed = append(processed, processPartition(ctx, handler, partition.Records)...)
+			processed = append(processed, processPartition(ctx, c.processSpan, handler, partition.Records)...)
 		})
 
 		if len(processed) == 0 {
@@ -62,15 +72,23 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) {
 		}
 
 		if err := c.client.CommitRecords(ctx, processed...); err != nil && !errors.Is(err, context.Canceled) {
-			logger.Log.Errorw("kafka.Run commit", "error", err)
+			logger.WithContext(ctx).Error("kafka.Run commit", "error", err)
 		}
 	}
 }
 
+type spanFunc func(context.Context, *kgo.Record) (context.Context, trace.Span)
+
+func (c *Consumer) processSpan(_ context.Context, record *kgo.Record) (context.Context, trace.Span) {
+	return c.tracer.WithProcessSpan(record)
+}
+
 // processPartition обрабатывает записи партиции по порядку и возвращает префикс, который можно коммитить.
-func processPartition(ctx context.Context, handler Handler, records []*kgo.Record) []*kgo.Record {
+func processPartition(
+	ctx context.Context, newSpan spanFunc, handler Handler, records []*kgo.Record,
+) []*kgo.Record {
 	for i, record := range records {
-		if err := handleRecord(ctx, handler, record); err != nil {
+		if err := handleRecord(ctx, newSpan, handler, record); err != nil {
 			return records[:i]
 		}
 	}
@@ -78,18 +96,29 @@ func processPartition(ctx context.Context, handler Handler, records []*kgo.Recor
 	return records
 }
 
-func handleRecord(ctx context.Context, handler Handler, record *kgo.Record) error {
+func handleRecord(ctx context.Context, newSpan spanFunc, handler Handler, record *kgo.Record) error {
+	ctx, span := newSpan(ctx, record)
+	defer span.End()
+
 	var event model.Event
 	if err := json.Unmarshal(record.Value, &event); err != nil {
-		logger.Log.Errorw("kafka.handleRecord Unmarshal",
+		logger.WithContext(ctx).Error("kafka.handleRecord Unmarshal",
 			"offset", record.Offset, "error", err)
+		span.SetStatus(codes.Error, "malformed event")
 
 		return nil
 	}
 
+	span.SetAttributes(
+		attribute.String("event.id", event.ID),
+		attribute.String("event.type", string(event.Type)),
+	)
+
 	if err := handler(ctx, event); err != nil {
-		logger.Log.Errorw("kafka.handleRecord handler",
+		logger.WithContext(ctx).Error("kafka.handleRecord handler",
 			"event_id", event.ID, "type", event.Type, "offset", record.Offset, "error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 
 		return err
 	}

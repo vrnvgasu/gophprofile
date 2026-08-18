@@ -17,4 +17,7 @@ type Config struct {
 	KafkaBrokers []string `env:"KAFKA_BROKERS" envSeparator:","`
 	KafkaTopic   string   `env:"KAFKA_TOPIC"`
 	KafkaGroupID string   `env:"KAFKA_GROUP_ID"`
+
+	OTLPEndpoint    string  `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	TraceSampleRate float64 `env:"OTEL_TRACES_SAMPLE_RATE"`
 }

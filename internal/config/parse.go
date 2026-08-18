@@ -19,6 +19,8 @@ const (
 	defaultS3Bucket      = "avatars"
 	defaultKafkaTopic    = "avatar-events"
 	defaultKafkaGroupID  = "avatar-worker"
+	defaultOTLPEndpoint  = ""
+	defaultSampleRate    = 1.0
 )
 
 var defaultKafkaBrokers = []string{"localhost:9092"}
@@ -41,6 +43,10 @@ func Parse() (*Config, error) {
 	pflag.StringSliceVar(&cfg.KafkaBrokers, "kafka-brokers", defaultKafkaBrokers, "адреса брокеров Kafka")
 	pflag.StringVar(&cfg.KafkaTopic, "kafka-topic", defaultKafkaTopic, "топик событий об аватарках")
 	pflag.StringVar(&cfg.KafkaGroupID, "kafka-group", defaultKafkaGroupID, "consumer-группа воркера")
+
+	pflag.StringVar(&cfg.OTLPEndpoint, "otlp-endpoint", defaultOTLPEndpoint,
+		"адрес OTLP-коллектора; пусто — телеметрия выключена")
+	pflag.Float64Var(&cfg.TraceSampleRate, "trace-sample-rate", defaultSampleRate, "доля сэмплируемых трейсов")
 
 	pflag.Parse()
 
