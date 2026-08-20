@@ -3,7 +3,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -49,11 +48,6 @@ func WithContext(ctx context.Context) *slog.Logger {
 		"trace_id", spanCtx.TraceID().String(),
 		"span_id", spanCtx.SpanID().String(),
 	)
-}
-
-func Fatalf(format string, args ...any) {
-	Log.Error(fmt.Sprintf(format, args...))
-	os.Exit(1)
 }
 
 type fanout []slog.Handler

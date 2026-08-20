@@ -29,9 +29,9 @@ const (
 	exportInterval  = 15 * time.Second
 )
 
-type Shutdown func(context.Context) error
+type ShutdownFunc func(context.Context) error
 
-func Init(ctx context.Context, service, version, endpoint string, sampleRatio float64) (Shutdown, error) {
+func Init(ctx context.Context, service, version, endpoint string, sampleRatio float64) (ShutdownFunc, error) {
 	setPropagator()
 
 	if endpoint == "" {
@@ -82,7 +82,7 @@ func newResource(service, version string) (*resource.Resource, error) {
 	return res, nil
 }
 
-func initTraces(ctx context.Context, res *resource.Resource, endpoint string, sampleRatio float64) (Shutdown, error) {
+func initTraces(ctx context.Context, res *resource.Resource, endpoint string, sampleRatio float64) (ShutdownFunc, error) {
 	exporter, err := otlptracegrpc.New(ctx,
 		otlptracegrpc.WithEndpoint(endpoint),
 		otlptracegrpc.WithInsecure(),
@@ -102,7 +102,7 @@ func initTraces(ctx context.Context, res *resource.Resource, endpoint string, sa
 	return provider.Shutdown, nil
 }
 
-func initMetrics(ctx context.Context, res *resource.Resource, endpoint string) (Shutdown, error) {
+func initMetrics(ctx context.Context, res *resource.Resource, endpoint string) (ShutdownFunc, error) {
 	exporter, err := otlpmetricgrpc.New(ctx,
 		otlpmetricgrpc.WithEndpoint(endpoint),
 		otlpmetricgrpc.WithInsecure(),
@@ -128,7 +128,7 @@ func initMetrics(ctx context.Context, res *resource.Resource, endpoint string) (
 	return provider.Shutdown, nil
 }
 
-func initLogs(ctx context.Context, res *resource.Resource, endpoint string) (Shutdown, error) {
+func initLogs(ctx context.Context, res *resource.Resource, endpoint string) (ShutdownFunc, error) {
 	exporter, err := otlploggrpc.New(ctx,
 		otlploggrpc.WithEndpoint(endpoint),
 		otlploggrpc.WithInsecure(),

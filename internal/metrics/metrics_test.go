@@ -116,6 +116,13 @@ func TestRecordBusinessEvents(t *testing.T) {
 }
 
 func TestUptimePublished(t *testing.T) {
+	t.Run("до MarkStarted серии нет", func(t *testing.T) {
+		_, ok := collect(t)["service_uptime_seconds"]
+		assert.False(t, ok, "аптайм не должен считаться от момента загрузки пакета")
+	})
+
+	MarkStarted()
+
 	uptime, ok := collect(t)["service_uptime_seconds"]
 	require.True(t, ok, "метрика service_uptime_seconds не опубликована")
 

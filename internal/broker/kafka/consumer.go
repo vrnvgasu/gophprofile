@@ -64,7 +64,7 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) {
 		var processed []*kgo.Record
 
 		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
-			processed = append(processed, processPartition(ctx, c.processSpan, handler, partition.Records)...)
+			processed = append(processed, processPartition(c.processSpan, handler, partition.Records)...)
 		})
 
 		if len(processed) == 0 {
@@ -77,18 +77,16 @@ func (c *Consumer) Run(ctx context.Context, handler Handler) {
 	}
 }
 
-type spanFunc func(context.Context, *kgo.Record) (context.Context, trace.Span)
+type spanFunc func(*kgo.Record) (context.Context, trace.Span)
 
-func (c *Consumer) processSpan(_ context.Context, record *kgo.Record) (context.Context, trace.Span) {
+func (c *Consumer) processSpan(record *kgo.Record) (context.Context, trace.Span) {
 	return c.tracer.WithProcessSpan(record)
 }
 
 // processPartition обрабатывает записи партиции по порядку и возвращает префикс, который можно коммитить.
-func processPartition(
-	ctx context.Context, newSpan spanFunc, handler Handler, records []*kgo.Record,
-) []*kgo.Record {
+func processPartition(newSpan spanFunc, handler Handler, records []*kgo.Record) []*kgo.Record {
 	for i, record := range records {
-		if err := handleRecord(ctx, newSpan, handler, record); err != nil {
+		if err := handleRecord(newSpan, handler, record); err != nil {
 			return records[:i]
 		}
 	}
@@ -96,8 +94,8 @@ func processPartition(
 	return records
 }
 
-func handleRecord(ctx context.Context, newSpan spanFunc, handler Handler, record *kgo.Record) error {
-	ctx, span := newSpan(ctx, record)
+func handleRecord(newSpan spanFunc, handler Handler, record *kgo.Record) error {
+	ctx, span := newSpan(record)
 	defer span.End()
 
 	var event model.Event

@@ -4,6 +4,7 @@ package metrics
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -18,7 +19,7 @@ const (
 	statusError   = "error"
 )
 
-var secondsBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+var secondsBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 var meter = otel.Meter(scopeName)
 
@@ -84,20 +85,29 @@ var (
 	))
 )
 
-var (
-	startedAt = time.Now()
+var startedAt atomic.Int64
 
-	_ = must(meter.Float64ObservableGauge(
-		"service_uptime_seconds",
-		metric.WithDescription("Seconds since service start"),
-		metric.WithUnit("s"),
-		metric.WithFloat64Callback(func(_ context.Context, observer metric.Float64Observer) error {
-			observer.Observe(time.Since(startedAt).Seconds())
-
+var _ = must(meter.Float64ObservableGauge(
+	"service_uptime_seconds",
+	metric.WithDescription("Seconds since service start"),
+	metric.WithUnit("s"),
+	metric.WithFloat64Callback(func(_ context.Context, observer metric.Float64Observer) error {
+		started := startedAt.Load()
+		if started == 0 {
 			return nil
-		}),
-	))
-)
+		}
+
+		observer.Observe(time.Since(time.Unix(0, started)).Seconds())
+
+		return nil
+	}),
+))
+
+// MarkStarted фиксирует момент, с которого считается service_uptime_seconds.
+// Вызывается, когда сервис готов принимать нагрузку.
+func MarkStarted() {
+	startedAt.Store(time.Now().UnixNano())
+}
 
 // RecordHTTPRequest снимает RED-метрики завершенного запроса.
 func RecordHTTPRequest(ctx context.Context, method, route string, statusCode int, duration time.Duration) {

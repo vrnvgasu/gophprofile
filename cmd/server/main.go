@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vrnvgasu/gophprofile/internal/broker/kafka"
+	"github.com/vrnvgasu/gophprofile/internal/config"
 	"github.com/vrnvgasu/gophprofile/internal/handler"
 	"github.com/vrnvgasu/gophprofile/internal/logger"
 	"github.com/vrnvgasu/gophprofile/internal/metrics"
@@ -27,10 +28,20 @@ const (
 )
 
 func main() {
-	cfg := parseConfig()
+	if err := run(); err != nil {
+		logger.Log.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
+}
 
-	if err := logger.Initialize(cfg.LogLevel, "server"); err != nil {
-		log.Fatalf("logger.Initialize: %v", err)
+func run() error {
+	cfg, err := config.Parse()
+	if err != nil {
+		return fmt.Errorf("config.Parse: %w", err)
+	}
+
+	if err = logger.Initialize(cfg.LogLevel, "server"); err != nil {
+		return fmt.Errorf("logger.Initialize: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -38,29 +49,29 @@ func main() {
 
 	shutdownTelemetry, err := telemetry.Init(ctx, serviceName, version, cfg.OTLPEndpoint, cfg.TraceSampleRate)
 	if err != nil {
-		logger.Fatalf("telemetry.Init: %v", err)
+		return fmt.Errorf("telemetry.Init: %w", err)
 	}
 
 	logger.AttachOTLP(serviceName)
 
 	storage := postgres.NewStorage()
-	if err := storage.Start(ctx, cfg.DatabaseURI); err != nil {
-		logger.Fatalf("storage.Start: %v", err)
+	if err = storage.Start(ctx, cfg.DatabaseURI); err != nil {
+		return fmt.Errorf("storage.Start: %w", err)
 	}
 	defer func() { _ = storage.Stop() }()
 
 	defer func() {
-		if err := shutdownTelemetry(context.Background()); err != nil {
-			logger.Log.Error("telemetry shutdown", "error", err)
+		if shutdownErr := shutdownTelemetry(context.Background()); shutdownErr != nil {
+			logger.Log.Error("telemetry shutdown", "error", shutdownErr)
 		}
 	}()
 
-	if err := metrics.RegisterDBStats(storage.DB(), "gophprofile"); err != nil {
-		logger.Fatalf("metrics.RegisterDBStats: %v", err)
+	if err = metrics.RegisterDBStats(storage.DB(), "gophprofile"); err != nil {
+		return fmt.Errorf("metrics.RegisterDBStats: %w", err)
 	}
 
-	if err := metrics.RegisterStats(storage); err != nil {
-		logger.Fatalf("metrics.RegisterStats: %v", err)
+	if err = metrics.RegisterStats(storage); err != nil {
+		return fmt.Errorf("metrics.RegisterStats: %w", err)
 	}
 
 	objects, err := s3.NewStorage(ctx, s3.Config{
@@ -71,12 +82,12 @@ func main() {
 		UseSSL:    cfg.S3UseSSL,
 	})
 	if err != nil {
-		logger.Fatalf("s3.NewStorage: %v", err)
+		return fmt.Errorf("s3.NewStorage: %w", err)
 	}
 
 	producer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
 	if err != nil {
-		logger.Fatalf("kafka.NewProducer: %v", err)
+		return fmt.Errorf("kafka.NewProducer: %w", err)
 	}
 	defer producer.Close()
 
@@ -90,20 +101,32 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Ошибка слушателя должна вернуться в run, а не завершать процесс из горутины.
+	srvErr := make(chan error, 1)
+
+	logger.Log.Info("starting server", "address", cfg.RunAddress)
+	metrics.MarkStarted()
+
 	go func() {
-		logger.Log.Info("starting server", "address", cfg.RunAddress)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatalf("srv.ListenAndServe: %v", err)
+		if listenErr := srv.ListenAndServe(); listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
+			srvErr <- fmt.Errorf("srv.ListenAndServe: %w", listenErr)
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case err = <-srvErr:
+		return err
+	case <-ctx.Done():
+	}
+
 	logger.Log.Info("shutting down...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err = srv.Shutdown(shutdownCtx); err != nil {
-		logger.Log.Error("srv.Shutdown", "error", err)
+		return fmt.Errorf("srv.Shutdown: %w", err)
 	}
+
+	return nil
 }
