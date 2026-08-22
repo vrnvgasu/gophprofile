@@ -33,7 +33,7 @@ func Logger(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 
-		logger.Log.Infow("http request",
+		logger.WithContext(r.Context()).Info("http request",
 			"method", r.Method,
 			"uri", r.RequestURI,
 			"status", rw.status,

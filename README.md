@@ -14,7 +14,13 @@
 | Хранилище файлов | MinIO / S3 (minio-go) |
 | Брокер сообщений | Kafka в режиме KRaft (franz-go) |
 | Обработка изображений | disintegration/imaging |
-| Логи | zap |
+| Логи | slog (JSON) + мост OpenTelemetry |
+| Телеметрия | OpenTelemetry SDK → OTLP → OpenTelemetry Collector |
+| Трейсинг | Jaeger |
+| Метрики | Prometheus |
+| Сбор логов | Loki |
+| Визуализация | Grafana |
+| Алерты на ошибки в логах | Loki ruler → Alertmanager |
 | Тесты | testify + go.uber.org/mock + go-sqlmock |
 
 ## Быстрый старт
@@ -22,12 +28,20 @@
 Все окружение в контейнерах:
 
 ```sh
-make up      # postgres + minio + kafka + server + worker
+make up      # приложение + инфраструктура + стенд наблюдаемости
 make down
 ```
 
 Сервис поднимется на `http://localhost:8080`, веб-интерфейс — там же.
-Консоль MinIO — `http://localhost:9001` (minioadmin / minioadmin).
+
+| Интерфейс | Адрес | Доступ |
+|---|---|---|
+| Веб-интерфейс и API | http://localhost:8080 | — |
+| Grafana | http://localhost:3000 | admin / admin |
+| Jaeger | http://localhost:16686 | — |
+| Prometheus | http://localhost:9090 | — |
+| Alertmanager | http://localhost:9093 | — |
+| Консоль MinIO | http://localhost:9001 | minioadmin / minioadmin |
 
 Локальная разработка (инфраструктура в Docker, приложение — на хосте):
 
@@ -84,6 +98,8 @@ curl -X DELETE localhost:8080/api/v1/avatars/<id> -H "X-User-ID: user-1"
 | `KAFKA_BROKERS` | `--kafka-brokers` | `localhost:9092` |
 | `KAFKA_TOPIC` | `--kafka-topic` | `avatar-events` |
 | `KAFKA_GROUP_ID` | `--kafka-group` | `avatar-worker` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `--otlp-endpoint` | пусто — телеметрия выключена |
+| `OTEL_TRACES_SAMPLE_RATE` | `--trace-sample-rate` | `1.0` |
 
 ## Разработка
 
@@ -97,5 +113,3 @@ make vet           # go vet
 make build         # бинарники в bin/
 make install-lint  # поставить golangci-lint нужной версии
 ```
-
-

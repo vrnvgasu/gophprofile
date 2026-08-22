@@ -211,3 +211,41 @@ func scanAvatar(row scanner) (*model.Avatar, error) {
 
 	return &avatar, nil
 }
+
+// Stats возвращает сводку по живым аватаркам.
+func (s *Storage) Stats(ctx context.Context) (*model.Stats, error) {
+	const query = `
+		SELECT COALESCE(SUM(size_bytes), 0), processing_status, COUNT(*)
+		FROM avatars
+		WHERE deleted_at IS NULL
+		GROUP BY processing_status`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("postgres.Stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	stats := &model.Stats{ByProcessingStatus: map[string]int64{}}
+
+	for rows.Next() {
+		var (
+			bytes  int64
+			status string
+			count  int64
+		)
+
+		if err = rows.Scan(&bytes, &status, &count); err != nil {
+			return nil, fmt.Errorf("postgres.Stats Scan: %w", err)
+		}
+
+		stats.TotalBytes += bytes
+		stats.ByProcessingStatus[status] = count
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres.Stats rows: %w", err)
+	}
+
+	return stats, nil
+}

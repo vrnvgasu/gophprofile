@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/vrnvgasu/gophprofile/internal/handler/middleware"
 )
@@ -13,6 +14,7 @@ import (
 // NewRouter создает chi-роутер.
 func NewRouter(h *Handler, staticDir string) http.Handler {
 	r := chi.NewRouter()
+	r.Use(middleware.Observability)
 	r.Use(middleware.Logger)
 	r.Use(middleware.UserID)
 
@@ -41,7 +43,7 @@ func NewRouter(h *Handler, staticDir string) http.Handler {
 
 	mountStatic(r, staticDir)
 
-	return r
+	return otelhttp.NewHandler(r, "http.server")
 }
 
 func mountStatic(r chi.Router, staticDir string) {

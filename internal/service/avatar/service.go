@@ -9,13 +9,32 @@ import (
 	"io"
 	"path"
 
-	"github.com/google/uuid"
+	"time"
 
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/model"
 	"github.com/vrnvgasu/gophprofile/internal/repository"
 	"github.com/vrnvgasu/gophprofile/internal/storage/s3"
 	"github.com/vrnvgasu/gophprofile/pkg/images"
 )
+
+var tracer = otel.Tracer("gophprofile/avatar-service")
+
+func finishSpan(span trace.Span, err error) {
+	var serviceErr *ServiceError
+	if err != nil && !errors.As(err, &serviceErr) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	span.End()
+}
 
 //go:generate mockgen -destination=./mocks/mock.go -package=mocks . ObjectStorage,Producer
 type ObjectStorage interface {
@@ -57,7 +76,23 @@ type Content struct {
 	ETag     string
 }
 
-func (s *Service) Upload(ctx context.Context, userID, fileName string, data []byte) (*model.Avatar, error) {
+func (s *Service) Upload(
+	ctx context.Context, userID, fileName string, data []byte,
+) (_ *model.Avatar, err error) {
+	ctx, span := tracer.Start(ctx, "upload_avatar")
+	start := time.Now()
+
+	defer func() {
+		metrics.RecordUpload(ctx, err, time.Since(start))
+		finishSpan(span, err)
+	}()
+
+	span.SetAttributes(
+		attribute.String("user_id", userID),
+		attribute.String("file_name", fileName),
+		attribute.Int64("file_size", int64(len(data))),
+	)
+
 	if userID == "" {
 		return nil, UnauthorizedError()
 	}
@@ -165,7 +200,19 @@ func (s *Service) DownloadUserAvatar(ctx context.Context, userID, size string) (
 }
 
 // Delete мягко удаляет аватарку и публикует событие на удаление файлов из хранилища.
-func (s *Service) Delete(ctx context.Context, id, userID string) error {
+func (s *Service) Delete(ctx context.Context, id, userID string) (err error) {
+	ctx, span := tracer.Start(ctx, "delete_avatar")
+
+	defer func() {
+		metrics.RecordDelete(ctx, err)
+		finishSpan(span, err)
+	}()
+
+	span.SetAttributes(
+		attribute.String("avatar_id", id),
+		attribute.String("user_id", userID),
+	)
+
 	if userID == "" {
 		return UnauthorizedError()
 	}

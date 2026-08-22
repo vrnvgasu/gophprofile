@@ -9,9 +9,16 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var ErrNotFound = errors.New("s3: object not found")
+
+var tracer = otel.Tracer("gophprofile/s3")
 
 type Config struct {
 	Endpoint  string
@@ -59,12 +66,37 @@ func (s *Storage) ensureBucket(ctx context.Context) error {
 	return nil
 }
 
+func (s *Storage) startSpan(ctx context.Context, op, key string) (context.Context, trace.Span) {
+	ctx, span := tracer.Start(ctx, "s3."+op, trace.WithSpanKind(trace.SpanKindClient))
+	span.SetAttributes(
+		semconv.RPCSystemKey.String("s3"),
+		attribute.String("s3.operation", op),
+		attribute.String("s3.bucket", s.bucket),
+		attribute.String("s3.key", key),
+	)
+
+	return ctx, span
+}
+
+func finishSpan(span trace.Span, err error) {
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	span.End()
+}
+
 // Put сохраняет объект под указанным ключом.
-func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
-	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
+func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) (err error) {
+	ctx, span := s.startSpan(ctx, "put", key)
+	span.SetAttributes(attribute.Int64("s3.size", size))
+
+	defer func() { finishSpan(span, err) }()
+
+	if _, err = s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
 		ContentType: contentType,
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("s3.Put %q: %w", key, err)
 	}
 
@@ -72,7 +104,10 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 }
 
 // Get возвращает содержимое объекта. Вызывающий обязан закрыть возвращенный поток.
-func (s *Storage) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+func (s *Storage) Get(ctx context.Context, key string) (_ io.ReadCloser, err error) {
+	ctx, span := s.startSpan(ctx, "get", key)
+	defer func() { finishSpan(span, err) }()
+
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("s3.Get %q: %w", key, err)
@@ -83,7 +118,9 @@ func (s *Storage) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 		_ = obj.Close()
 
 		if minio.ToErrorResponse(err).StatusCode == 404 {
-			return nil, ErrNotFound
+			err = ErrNotFound
+
+			return nil, err
 		}
 
 		return nil, fmt.Errorf("s3.Get Stat %q: %w", key, err)
@@ -93,9 +130,11 @@ func (s *Storage) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 }
 
 // Delete удаляет объект.
-func (s *Storage) Delete(ctx context.Context, key string) error {
-	err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
-	if err != nil {
+func (s *Storage) Delete(ctx context.Context, key string) (err error) {
+	ctx, span := s.startSpan(ctx, "delete", key)
+	defer func() { finishSpan(span, err) }()
+
+	if err = s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		return fmt.Errorf("s3.Delete %q: %w", key, err)
 	}
 

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/vrnvgasu/gophprofile/internal/logger"
+	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/model"
 	"github.com/vrnvgasu/gophprofile/internal/repository"
 	"github.com/vrnvgasu/gophprofile/internal/service/avatar"
@@ -44,7 +46,13 @@ func New(storage repository.AvatarStorage, objects ObjectStorage) *Worker {
 	return &Worker{storage: storage, objects: objects}
 }
 
-func (w *Worker) Handle(ctx context.Context, event model.Event) error {
+func (w *Worker) Handle(ctx context.Context, event model.Event) (err error) {
+	start := time.Now()
+
+	defer func() {
+		metrics.RecordEventProcessed(ctx, string(event.Type), err, time.Since(start))
+	}()
+
 	switch event.Type {
 	case model.EventAvatarUploaded:
 		var payload model.AvatarUploadEvent
@@ -63,7 +71,7 @@ func (w *Worker) Handle(ctx context.Context, event model.Event) error {
 		return w.HandleDeleteEvent(ctx, payload)
 
 	default:
-		logger.Log.Warnw("worker.Handle unknown event type", "type", event.Type, "event_id", event.ID)
+		logger.WithContext(ctx).Warn("worker.Handle unknown event type", "type", event.Type, "event_id", event.ID)
 		return nil
 	}
 }
@@ -74,7 +82,7 @@ func (w *Worker) HandleUploadEvent(ctx context.Context, event model.AvatarUpload
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			// Аватарку успели удалить — обрабатывать нечего.
-			logger.Log.Infow("worker.HandleUploadEvent avatar gone", "avatar_id", event.AvatarID)
+			logger.WithContext(ctx).Info("worker.HandleUploadEvent avatar gone", "avatar_id", event.AvatarID)
 			return nil
 		}
 
@@ -82,7 +90,7 @@ func (w *Worker) HandleUploadEvent(ctx context.Context, event model.AvatarUpload
 	}
 
 	if avatarRecord.ProcessingStatus == model.ProcessingStatusCompleted {
-		logger.Log.Infow("worker.HandleUploadEvent already processed", "avatar_id", event.AvatarID)
+		logger.WithContext(ctx).Info("worker.HandleUploadEvent already processed", "avatar_id", event.AvatarID)
 		return nil
 	}
 
@@ -95,7 +103,7 @@ func (w *Worker) HandleUploadEvent(ctx context.Context, event model.AvatarUpload
 		if statusErr := w.storage.SetProcessingStatus(
 			ctx, event.AvatarID, model.ProcessingStatusFailed,
 		); statusErr != nil {
-			logger.Log.Errorw("worker.HandleUploadEvent SetProcessingStatus failed",
+			logger.WithContext(ctx).Error("worker.HandleUploadEvent SetProcessingStatus failed",
 				"avatar_id", event.AvatarID, "error", statusErr)
 		}
 
@@ -106,7 +114,7 @@ func (w *Worker) HandleUploadEvent(ctx context.Context, event model.AvatarUpload
 		return fmt.Errorf("worker.HandleUploadEvent SaveThumbnails: %w", err)
 	}
 
-	logger.Log.Infow("worker.HandleUploadEvent done", "avatar_id", event.AvatarID)
+	logger.WithContext(ctx).Info("worker.HandleUploadEvent done", "avatar_id", event.AvatarID)
 
 	return nil
 }
@@ -120,7 +128,7 @@ func (w *Worker) HandleDeleteEvent(ctx context.Context, event model.AvatarDelete
 		}
 	}
 
-	logger.Log.Infow("worker.HandleDeleteEvent done",
+	logger.WithContext(ctx).Info("worker.HandleDeleteEvent done",
 		"avatar_id", event.AvatarID, "keys", len(event.S3Keys))
 
 	return nil

@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/XSAM/otelsql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 type Storage struct {
@@ -20,7 +22,7 @@ func NewStorage() *Storage {
 func (s *Storage) Start(ctx context.Context, dsn string) error {
 	classifier := newPostgresErrorClassifier()
 
-	db, err := sql.Open("pgx", dsn)
+	db, err := otelsql.Open("pgx", dsn, otelsql.WithAttributes(semconv.DBSystemPostgreSQL))
 	if err != nil {
 		return fmt.Errorf("postgres.Start Open: %w", err)
 	}
@@ -46,4 +48,8 @@ func (s *Storage) Ping(ctx context.Context) error {
 
 func (s *Storage) Stop() error {
 	return s.db.Close()
+}
+
+func (s *Storage) DB() *sql.DB {
+	return s.db
 }

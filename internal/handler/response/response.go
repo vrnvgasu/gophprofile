@@ -25,7 +25,7 @@ func JSON(w http.ResponseWriter, code int, payload any) {
 	}
 
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		logger.Log.Errorw("response.JSON Encode", "error", err)
+		logger.Log.Error("response.JSON Encode", "error", err)
 	}
 }
 
@@ -58,7 +58,7 @@ func ResponseError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func LogError(r *http.Request, err error) {
-	logger.Log.Errorw("http request",
+	logger.WithContext(r.Context()).Error("http request",
 		"uri", r.RequestURI,
 		"method", r.Method,
 		"error", err,
