@@ -1,0 +1,41 @@
+{{- if .Values.migrations.enabled }}
+# Миграции БД отдельным Job-ом. Helm запускает его как хук
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gophprofile-migrate
+  labels:
+    app: gophprofile-migrate
+  annotations:
+    "helm.sh/hook": {{ .Values.migrations.hooks | quote }}
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: gophprofile-migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: gophprofile
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/migrate"]
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: gophprofile-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}

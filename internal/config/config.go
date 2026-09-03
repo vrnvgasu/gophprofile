@@ -8,6 +8,9 @@ type Config struct {
 	StaticDir     string `env:"STATIC_DIR"`
 	MaxUploadSize int64  `env:"MAX_UPLOAD_SIZE"`
 
+	RateLimitRPS   float64 `env:"RATE_LIMIT_RPS"`
+	RateLimitBurst int     `env:"RATE_LIMIT_BURST"`
+
 	S3Endpoint  string `env:"S3_ENDPOINT"`
 	S3AccessKey string `env:"S3_ACCESS_KEY"`
 	S3SecretKey string `env:"S3_SECRET_KEY"`

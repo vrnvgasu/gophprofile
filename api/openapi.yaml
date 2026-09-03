@@ -1,0 +1,458 @@
+openapi: 3.0.3
+info:
+  title: GophProfile API
+  description: |
+    Сервис аватарок: загрузка изображений, асинхронная генерация миниатюр
+    100x100 и 300x300, раздача файлов и метаданных.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: локальный запуск
+  - url: http://avatars.local
+    description: Ingress в кластере Kubernetes
+
+tags:
+  - name: avatars
+    description: Аватарки
+  - name: users
+    description: Аватарки конкретного пользователя
+  - name: service
+    description: Служебные эндпоинты
+  - name: web
+    description: Веб-интерфейс
+
+paths:
+  /api/v1/avatars:
+    post:
+      tags: [avatars]
+      summary: Загрузить аватарку
+      description: |
+        Файл принимается в поле `file` (поле `image` поддерживается для
+        совместимости с формой веб-интерфейса). Оригинал сохраняется сразу,
+        миниатюры делает воркер, поэтому сразу после загрузки статус —
+        `processing`.
+      parameters:
+        - $ref: '#/components/parameters/UserIDHeader'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: аватарка принята
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: файл больше допустимого размера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/v1/avatars/{avatar_id}:
+    get:
+      tags: [avatars]
+      summary: Получить изображение
+      description: |
+        Публичный эндпоинт, заголовок `X-User-ID` не нужен. Если миниатюра
+        запрошенного размера ещё не готова, отдаётся оригинал.
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+        - name: size
+          in: query
+          description: размер изображения
+          schema:
+            type: string
+            enum: [100x100, 300x300, original]
+        - name: If-None-Match
+          in: header
+          description: ETag ранее полученного изображения
+          schema:
+            type: string
+      responses:
+        '200':
+          description: изображение
+          headers:
+            ETag:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: изображение не изменилось
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags: [avatars]
+      summary: Удалить аватарку
+      description: |
+        Мягкое удаление: запись помечается удалённой, файлы из хранилища
+        убирает воркер по событию.
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+        - $ref: '#/components/parameters/UserIDHeader'
+      responses:
+        '204':
+          description: удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: аватарка принадлежит другому пользователю
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/v1/avatars/{avatar_id}/metadata:
+    get:
+      tags: [avatars]
+      summary: Метаданные аватарки
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+      responses:
+        '200':
+          description: метаданные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/v1/users/{user_id}/avatar:
+    get:
+      tags: [users]
+      summary: Текущая аватарка пользователя
+      description: Возвращает метаданные последней загруженной аватарки.
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: метаданные
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    delete:
+      tags: [users]
+      summary: Удалить текущую аватарку пользователя
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/UserIDHeader'
+      responses:
+        '204':
+          description: удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: удалять чужие аватарки нельзя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/v1/users/{user_id}/avatars:
+    get:
+      tags: [users]
+      summary: Список аватарок пользователя
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: список метаданных, от новых к старым
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Metadata'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /health:
+    get:
+      tags: [service]
+      summary: Состояние сервиса
+      description: |
+        Проверяет БД, объектное хранилище и брокер. Используется пробами
+        Kubernetes: 503 означает, что под не готов принимать трафик.
+      responses:
+        '200':
+          description: все компоненты доступны
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: какой-то из компонентов недоступен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /web/upload:
+    get:
+      tags: [web]
+      summary: Страница загрузки
+      responses:
+        '200':
+          description: HTML-страница веб-интерфейса
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      tags: [web]
+      summary: Отправка формы загрузки
+      description: |
+        Серверная обработка обычной HTML-формы. Идентификатор берётся из поля
+        `userId`, при его отсутствии — из заголовка `X-User-ID`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [userId, file]
+              properties:
+                userId:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '303':
+          description: редирект в галерею пользователя
+          headers:
+            Location:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /web/gallery/{user_id}:
+    get:
+      tags: [web]
+      summary: Галерея аватарок пользователя
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: HTML-страница веб-интерфейса
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  parameters:
+    AvatarID:
+      name: avatar_id
+      in: path
+      required: true
+      description: идентификатор аватарки
+      schema:
+        type: string
+        format: uuid
+    UserID:
+      name: user_id
+      in: path
+      required: true
+      description: идентификатор пользователя
+      schema:
+        type: string
+    UserIDHeader:
+      name: X-User-ID
+      in: header
+      required: true
+      description: идентификатор пользователя, от имени которого выполняется запрос
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: некорректный запрос
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: не передан заголовок X-User-ID
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: аватарка не найдена
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: |
+        превышен лимит частоты запросов к API; лимит считается по адресу
+        клиента отдельно на каждой реплике сервиса
+      headers:
+        Retry-After:
+          description: через сколько секунд можно повторить запрос
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailable:
+      description: |
+        внешняя зависимость (хранилище или брокер) недоступна и предохранитель
+        разомкнут: запрос отклонён сразу, без обращения к ней
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    UploadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        url:
+          type: string
+          example: /api/v1/avatars/4e6fcfe0-f2e7-4f53-8de6-271a4e9187e5
+        status:
+          $ref: '#/components/schemas/Status'
+        created_at:
+          type: string
+          format: date-time
+
+    Metadata:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        file_name:
+          type: string
+        mime_type:
+          type: string
+          example: image/png
+        size:
+          type: integer
+          format: int64
+          description: размер оригинала в байтах
+        status:
+          $ref: '#/components/schemas/Status'
+        url:
+          type: string
+        dimensions:
+          type: object
+          properties:
+            width:
+              type: integer
+            height:
+              type: integer
+        thumbnails:
+          type: array
+          items:
+            type: object
+            properties:
+              size:
+                type: string
+                enum: [100x100, 300x300]
+              url:
+                type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Status:
+      type: string
+      description: состояние асинхронной обработки
+      enum: [processing, completed, failed]
+
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [up, down]
+        components:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            database: up
+            s3: up
+            broker: up
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+        max_size:
+          type: integer
+          format: int64
+          description: максимальный размер файла, приходит вместе с ошибкой 413

@@ -71,3 +71,43 @@ up:
 .PHONY: down
 down:
 	@docker compose -f deployments/docker-compose.yaml down
+
+# --- Kubernetes ---
+
+# Локальный кластер: ingress-контроллер и metrics-server нужны Ingress и HPA.
+.PHONY: k8s-up
+k8s-up:
+	@minikube start --driver=docker --cpus=4 --memory=8192
+	@minikube addons enable ingress
+	@minikube addons enable metrics-server
+
+.PHONY: k8s-down
+k8s-down:
+	@minikube delete
+
+.PHONY: k8s-image
+k8s-image:
+	@eval $$(minikube -p minikube docker-env) && docker build -t gophprofile:latest .
+
+.PHONY: monitoring-up
+monitoring-up:
+	@helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	@helm repo update
+	@helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+		--namespace monitoring --create-namespace \
+		--set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false \
+		--set alertmanager.enabled=false --wait --timeout 10m
+
+.PHONY: helm-lint
+helm-lint:
+	@helm lint deployments/helm/gophprofile
+	@helm template gophprofile deployments/helm/gophprofile -f deployments/helm/gophprofile/values-dev.yaml >/dev/null
+
+.PHONY: deploy
+deploy: k8s-image
+	@helm upgrade --install gophprofile deployments/helm/gophprofile \
+		-f deployments/helm/gophprofile/values-dev.yaml --wait --timeout 8m
+
+.PHONY: undeploy
+undeploy:
+	@helm uninstall gophprofile

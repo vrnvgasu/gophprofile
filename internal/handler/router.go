@@ -12,7 +12,7 @@ import (
 )
 
 // NewRouter создает chi-роутер.
-func NewRouter(h *Handler, staticDir string) http.Handler {
+func NewRouter(h *Handler, staticDir string, limiter *middleware.RateLimiter) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Observability)
 	r.Use(middleware.Logger)
@@ -21,6 +21,8 @@ func NewRouter(h *Handler, staticDir string) http.Handler {
 	r.Get("/health", h.Health)
 
 	r.Route("/api/v1", func(api chi.Router) {
+		api.Use(limiter.Middleware)
+
 		api.Route("/avatars", func(avatars chi.Router) {
 			avatars.Post("/", h.UploadAvatar)
 			avatars.Get("/{avatar_id}", h.GetAvatar)

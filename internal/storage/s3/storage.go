@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -14,9 +16,22 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/vrnvgasu/gophprofile/pkg/breaker"
 )
 
 var ErrNotFound = errors.New("s3: object not found")
+
+const (
+	dialTimeout       = 2 * time.Second
+	responseTimeout   = 5 * time.Second
+	storageMaxRetries = 2
+)
+
+const (
+	breakerFailures    = 3
+	breakerOpenTimeout = 30 * time.Second
+)
 
 var tracer = otel.Tracer("gophprofile/s3")
 
@@ -29,25 +44,48 @@ type Config struct {
 }
 
 type Storage struct {
-	client *minio.Client
-	bucket string
+	client  *minio.Client
+	bucket  string
+	breaker *breaker.Breaker
 }
 
 func NewStorage(ctx context.Context, cfg Config) (*Storage, error) {
+	transport, err := minio.DefaultTransport(cfg.UseSSL)
+	if err != nil {
+		return nil, fmt.Errorf("s3.NewStorage DefaultTransport: %w", err)
+	}
+
+	transport.DialContext = (&net.Dialer{Timeout: dialTimeout}).DialContext
+	transport.ResponseHeaderTimeout = responseTimeout
+
+	minio.MaxRetry = storageMaxRetries
+
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
+		Creds:     credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure:    cfg.UseSSL,
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("s3.NewStorage New: %w", err)
 	}
 
-	s := &Storage{client: client, bucket: cfg.Bucket}
+	s := &Storage{client: client, bucket: cfg.Bucket, breaker: newBreaker()}
 	if err = s.ensureBucket(ctx); err != nil {
 		return nil, err
 	}
 
 	return s, nil
+}
+
+func newBreaker() *breaker.Breaker {
+	cnf := breaker.DefaultConfig()
+	cnf.FailureThreshold = breakerFailures
+	cnf.OpenTimeout = breakerOpenTimeout
+	cnf.IsFailure = func(err error) bool {
+		return err != nil && !errors.Is(err, ErrNotFound)
+	}
+
+	return breaker.NewWithSettings("s3", cnf)
 }
 
 func (s *Storage) ensureBucket(ctx context.Context) error {
@@ -94,13 +132,15 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 
 	defer func() { finishSpan(span, err) }()
 
-	if _, err = s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
-		ContentType: contentType,
-	}); err != nil {
-		return fmt.Errorf("s3.Put %q: %w", key, err)
-	}
+	return s.breaker.Do(ctx, func() error {
+		if _, putErr := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
+			ContentType: contentType,
+		}); putErr != nil {
+			return fmt.Errorf("s3.Put %q: %w", key, putErr)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 // Get возвращает содержимое объекта. Вызывающий обязан закрыть возвращенный поток.
@@ -108,22 +148,31 @@ func (s *Storage) Get(ctx context.Context, key string) (_ io.ReadCloser, err err
 	ctx, span := s.startSpan(ctx, "get", key)
 	defer func() { finishSpan(span, err) }()
 
-	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("s3.Get %q: %w", key, err)
-	}
+	var obj *minio.Object
 
-	// GetObject ленивый: ошибки отсутствия объекта всплывают только при первом обращении.
-	if _, err = obj.Stat(); err != nil {
-		_ = obj.Close()
-
-		if minio.ToErrorResponse(err).StatusCode == 404 {
-			err = ErrNotFound
-
-			return nil, err
+	err = s.breaker.Do(ctx, func() error {
+		object, getErr := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+		if getErr != nil {
+			return fmt.Errorf("s3.Get %q: %w", key, getErr)
 		}
 
-		return nil, fmt.Errorf("s3.Get Stat %q: %w", key, err)
+		// GetObject ленивый: ошибки отсутствия объекта всплывают только при первом обращении.
+		if _, statErr := object.Stat(); statErr != nil {
+			_ = object.Close()
+
+			if minio.ToErrorResponse(statErr).StatusCode == 404 {
+				return ErrNotFound
+			}
+
+			return fmt.Errorf("s3.Get Stat %q: %w", key, statErr)
+		}
+
+		obj = object
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return obj, nil
@@ -134,11 +183,13 @@ func (s *Storage) Delete(ctx context.Context, key string) (err error) {
 	ctx, span := s.startSpan(ctx, "delete", key)
 	defer func() { finishSpan(span, err) }()
 
-	if err = s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
-		return fmt.Errorf("s3.Delete %q: %w", key, err)
-	}
+	return s.breaker.Do(ctx, func() error {
+		if delErr := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); delErr != nil {
+			return fmt.Errorf("s3.Delete %q: %w", key, delErr)
+		}
 
-	return nil
+		return nil
+	})
 }
 
 func (s *Storage) Ping(ctx context.Context) error {

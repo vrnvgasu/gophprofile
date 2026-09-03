@@ -11,14 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/vrnvgasu/gophprofile/internal/handler/middleware"
 	"github.com/vrnvgasu/gophprofile/internal/handler/mocks"
+	"github.com/vrnvgasu/gophprofile/internal/service/avatar"
 )
 
 func newStaticServer(t *testing.T, staticDir string) *httptest.Server {
 	t.Helper()
 
 	app := mocks.NewMockApp(gomock.NewController(t))
-	srv := httptest.NewServer(NewRouter(NewHandler(app, testMaxUploadSize), staticDir))
+	srv := httptest.NewServer(NewRouter(NewHandler(app, testMaxUploadSize), staticDir, nil))
 	t.Cleanup(srv.Close)
 
 	return srv
@@ -71,4 +73,26 @@ func TestRouterWithMissingStaticDir(t *testing.T) {
 
 	resp := doRequest(t, http.MethodGet, srv.URL+"/", nil, nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestRouterRateLimit(t *testing.T) {
+	t.Parallel()
+
+	staticDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<html>spa</html>"), 0o600))
+
+	app := mocks.NewMockApp(gomock.NewController(t))
+	app.EXPECT().Metadata(gomock.Any(), gomock.Any()).Return(nil, avatar.NotFoundError()).AnyTimes()
+
+	limiter := middleware.NewRateLimiter(1, 1)
+	srv := httptest.NewServer(NewRouter(NewHandler(app, testMaxUploadSize), staticDir, limiter))
+	t.Cleanup(srv.Close)
+
+	metadataURL := srv.URL + "/api/v1/avatars/avatar-1/metadata"
+
+	require.Equal(t, http.StatusNotFound, doRequest(t, http.MethodGet, metadataURL, nil, nil).StatusCode)
+	assert.Equal(t, http.StatusTooManyRequests, doRequest(t, http.MethodGet, metadataURL, nil, nil).StatusCode)
+
+	// Веб-страницы под лимит не попадают.
+	assert.Equal(t, http.StatusOK, doRequest(t, http.MethodGet, srv.URL+"/web/upload", nil, nil).StatusCode)
 }

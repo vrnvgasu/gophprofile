@@ -1,0 +1,24 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gophprofile
+  labels:
+    app: gophprofile-server
+  annotations:
+    # По умолчанию nginx режет тело запроса на 1 МБ — аватарку не загрузить.
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.maxBodySize | quote }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gophprofile-server
+                port:
+                  number: 80
+{{- end }}

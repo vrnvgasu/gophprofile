@@ -29,7 +29,7 @@ func newTestServer(t *testing.T) (*mocks.MockApp, *httptest.Server) {
 
 	ctrl := gomock.NewController(t)
 	app := mocks.NewMockApp(ctrl)
-	srv := httptest.NewServer(NewRouter(NewHandler(app, testMaxUploadSize), ""))
+	srv := httptest.NewServer(NewRouter(NewHandler(app, testMaxUploadSize), "", nil))
 	t.Cleanup(srv.Close)
 
 	return app, srv

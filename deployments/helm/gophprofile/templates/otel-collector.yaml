@@ -1,0 +1,131 @@
+{{- if .Values.otelCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-otel-collector
+  labels:
+    app: gophprofile-otel-collector
+data:
+  otel-collector.yml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      resource/prune:
+        attributes:
+          - key: telemetry.sdk.name
+            action: delete
+          - key: telemetry.sdk.language
+            action: delete
+          - key: telemetry.sdk.version
+            action: delete
+
+      resource/job:
+        attributes:
+          - key: job
+            from_attribute: service.name
+            action: upsert
+
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        add_metric_suffixes: false
+        metric_expiration: 1m
+      {{- if .Values.otelCollector.jaegerEndpoint }}
+      otlp/jaeger:
+        endpoint: {{ .Values.otelCollector.jaegerEndpoint }}
+        tls:
+          insecure: true
+      {{- end }}
+      {{- if .Values.otelCollector.lokiEndpoint }}
+      otlphttp/loki:
+        endpoint: {{ .Values.otelCollector.lokiEndpoint }}
+        tls:
+          insecure: true
+      {{- end }}
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        traces:
+          receivers: [ otlp ]
+          processors: [ batch ]
+          exporters: [ {{ if .Values.otelCollector.jaegerEndpoint }}otlp/jaeger{{ else }}debug{{ end }} ]
+
+        metrics:
+          receivers: [ otlp ]
+          processors: [ batch ]
+          exporters: [ prometheus ]
+
+        logs:
+          receivers: [ otlp ]
+          processors: [ resource/prune, resource/job, batch ]
+          exporters: [ {{ if .Values.otelCollector.lokiEndpoint }}otlphttp/loki{{ else }}debug{{ end }} ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gophprofile-otel-collector
+  labels:
+    app: gophprofile-otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gophprofile-otel-collector
+  template:
+    metadata:
+      labels:
+        app: gophprofile-otel-collector
+      annotations:
+        checksum/config: {{ toYaml .Values.otelCollector | sha256sum }}
+    spec:
+      containers:
+        - name: collector
+          image: {{ .Values.otelCollector.image }}
+          args: ["--config=/etc/otel-collector/otel-collector.yml"]
+          ports:
+            - name: otlp
+              containerPort: 4317
+            - name: metrics
+              containerPort: 8889
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel-collector
+      volumes:
+        - name: config
+          configMap:
+            name: gophprofile-otel-collector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gophprofile-otel-collector
+  labels:
+    app: gophprofile-otel-collector
+spec:
+  selector:
+    app: gophprofile-otel-collector
+  ports:
+    - name: otlp
+      port: 4317
+      targetPort: otlp
+    - name: metrics
+      port: 8889
+      targetPort: metrics
+{{- end }}

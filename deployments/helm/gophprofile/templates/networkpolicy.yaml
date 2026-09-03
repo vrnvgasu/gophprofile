@@ -1,0 +1,137 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gophprofile-server
+  labels:
+    app: gophprofile-server
+spec:
+  podSelector:
+    matchLabels:
+      app: gophprofile-server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - gophprofile-postgres
+                  - gophprofile-kafka
+                  - gophprofile-minio
+                  - gophprofile-otel-collector
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gophprofile-worker
+  labels:
+    app: gophprofile-worker
+spec:
+  podSelector:
+    matchLabels:
+      app: gophprofile-worker
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - gophprofile-postgres
+                  - gophprofile-kafka
+                  - gophprofile-minio
+                  - gophprofile-otel-collector
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gophprofile-infra
+  labels:
+    app: gophprofile
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - gophprofile-postgres
+          - gophprofile-kafka
+          - gophprofile-minio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - gophprofile-server
+                  - gophprofile-worker
+                  - gophprofile-migrate
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gophprofile-otel-collector
+  labels:
+    app: gophprofile-otel-collector
+spec:
+  podSelector:
+    matchLabels:
+      app: gophprofile-otel-collector
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - gophprofile-server
+                  - gophprofile-worker
+      ports:
+        - protocol: TCP
+          port: 4317
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.serviceMonitor.prometheusNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8889
+{{- end }}

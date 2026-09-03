@@ -1,0 +1,86 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gophprofile-postgres
+  labels:
+    app: gophprofile-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.postgres.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gophprofile-postgres
+  labels:
+    app: gophprofile-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gophprofile-postgres
+  template:
+    metadata:
+      labels:
+        app: gophprofile-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.db | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gophprofile-secrets
+                  key: POSTGRES_PASSWORD
+            # Данные в подкаталоге: корень тома принадлежит root, и initdb
+            # отказался бы работать прямо в нём.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgres.user | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gophprofile-postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gophprofile-postgres
+  labels:
+    app: gophprofile-postgres
+spec:
+  selector:
+    app: gophprofile-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

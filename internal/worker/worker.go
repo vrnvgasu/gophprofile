@@ -16,6 +16,7 @@ import (
 	"github.com/vrnvgasu/gophprofile/internal/repository"
 	"github.com/vrnvgasu/gophprofile/internal/service/avatar"
 	"github.com/vrnvgasu/gophprofile/internal/storage/s3"
+	"github.com/vrnvgasu/gophprofile/pkg/breaker"
 	"github.com/vrnvgasu/gophprofile/pkg/images"
 	"github.com/vrnvgasu/gophprofile/pkg/retry"
 )
@@ -190,7 +191,7 @@ func withRetry(fn func() error) error {
 			return nil
 		}
 
-		if errors.Is(err, s3.ErrNotFound) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, s3.ErrNotFound) || errors.Is(err, context.Canceled) || errors.Is(err, breaker.ErrOpen) {
 			return err
 		}
 
