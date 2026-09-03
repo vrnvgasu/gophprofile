@@ -23,6 +23,13 @@
 | Алерты на ошибки в логах | Loki ruler → Alertmanager |
 | Тесты | testify + go.uber.org/mock + go-sqlmock |
 
+## Архитектура
+
+Сервер принимает загрузку, кладет оригинал в S3, метаданные — в PostgreSQL
+и публикует событие в Kafka. Воркер читает событие, делает миниатюры 100x100
+и 300x300 и дописывает их в метаданные. Оба сервиса шлют трейсы, метрики и логи
+в OpenTelemetry Collector; наружу метрики отдает коллектор на порту 8889.
+
 ## Быстрый старт
 
 Все окружение в контейнерах:
@@ -70,6 +77,7 @@ make run-worker    # воркер, в отдельном терминале
 | GET | `/web/gallery/{user_id}` | галерея аватарок пользователя |
 | GET | `/*` | веб-интерфейс из `web/static` |
 
+Машиночитаемая спецификация — [`api/openapi.yaml`](api/openapi.yaml).
 
 Пример:
 
@@ -77,6 +85,33 @@ make run-worker    # воркер, в отдельном терминале
 curl -X POST localhost:8080/api/v1/avatars -H "X-User-ID: user-1" -F "file=@photo.png"
 curl "localhost:8080/api/v1/avatars/<id>?size=300x300" -o thumb.jpg
 curl -X DELETE localhost:8080/api/v1/avatars/<id> -H "X-User-ID: user-1"
+```
+
+## Развертывание в Kubernetes
+
+Нужны `minikube` (или другой кластер), `kubectl` и `helm`.
+
+```sh
+make k8s-up          # кластер minikube + аддоны ingress и metrics-server
+make monitoring-up   # kube-prometheus-stack: Prometheus Operator, Prometheus, Grafana
+make deploy          # собрать образ, залить в кластер и поставить чарт
+```
+
+Ingress отвечает на хосте `avatars.local` — его нужно прописать в `/etc/hosts`:
+
+```sh
+echo "$(minikube ip) avatars.local" | sudo tee -a /etc/hosts
+curl http://avatars.local/health
+```
+
+Веб-интерфейс — `http://avatars.local/web/upload`, удалить релиз — `make undeploy`.
+
+С внешней инфраструктурой ставится по `values-prod.yaml`: postgres, kafka и minio из чарта выключены, секреты передаются флагами.
+
+```sh
+helm upgrade --install gophprofile deployments/helm/gophprofile \
+  -f deployments/helm/gophprofile/values-prod.yaml \
+  --set secrets.databaseURI=... --set secrets.s3AccessKey=... --set secrets.s3SecretKey=...
 ```
 
 ## Конфигурация
@@ -90,6 +125,8 @@ curl -X DELETE localhost:8080/api/v1/avatars/<id> -H "X-User-ID: user-1"
 | `LOG_LEVEL` | `-l` | `info` |
 | `STATIC_DIR` | `--static` | `web/static` |
 | `MAX_UPLOAD_SIZE` | `--max-upload-size` | `10485760` |
+| `RATE_LIMIT_RPS` | `--rate-limit-rps` | `20` (`0` — без ограничения) |
+| `RATE_LIMIT_BURST` | `--rate-limit-burst` | `40` |
 | `S3_ENDPOINT` | `--s3-endpoint` | `localhost:9000` |
 | `S3_ACCESS_KEY` | `--s3-access-key` | `minioadmin` |
 | `S3_SECRET_KEY` | `--s3-secret-key` | `minioadmin` |

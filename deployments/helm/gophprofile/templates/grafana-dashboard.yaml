@@ -1,0 +1,12 @@
+{{- if .Values.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-dashboards
+  labels:
+    app: gophprofile
+    {{ .Values.grafanaDashboard.label }}: {{ .Values.grafanaDashboard.labelValue | quote }}
+data:
+  service-overview.json: |
+{{ .Files.Get "dashboards/service-overview.json" | indent 4 }}
+{{- end }}

@@ -13,14 +13,17 @@ const (
 	defaultLogLevel      = "info"
 	defaultStaticDir     = "web/static"
 	defaultMaxUploadSize = 10 << 20
-	defaultS3Endpoint    = "localhost:9000"
-	defaultS3AccessKey   = "minioadmin"
-	defaultS3SecretKey   = "minioadmin"
-	defaultS3Bucket      = "avatars"
-	defaultKafkaTopic    = "avatar-events"
-	defaultKafkaGroupID  = "avatar-worker"
-	defaultOTLPEndpoint  = ""
-	defaultSampleRate    = 1.0
+	// 0 выключает ограничение.
+	defaultRateLimitRPS   = 20.0
+	defaultRateLimitBurst = 40
+	defaultS3Endpoint     = "localhost:9000"
+	defaultS3AccessKey    = "minioadmin"
+	defaultS3SecretKey    = "minioadmin"
+	defaultS3Bucket       = "avatars"
+	defaultKafkaTopic     = "avatar-events"
+	defaultKafkaGroupID   = "avatar-worker"
+	defaultOTLPEndpoint   = ""
+	defaultSampleRate     = 1.0
 )
 
 var defaultKafkaBrokers = []string{"localhost:9092"}
@@ -33,6 +36,10 @@ func Parse() (*Config, error) {
 	pflag.StringVarP(&cfg.LogLevel, "loglevel", "l", defaultLogLevel, "уровень логирования")
 	pflag.StringVar(&cfg.StaticDir, "static", defaultStaticDir, "каталог со статикой веб-интерфейса")
 	pflag.Int64Var(&cfg.MaxUploadSize, "max-upload-size", defaultMaxUploadSize, "максимальный размер файла в байтах")
+	pflag.Float64Var(&cfg.RateLimitRPS, "rate-limit-rps", defaultRateLimitRPS,
+		"лимит запросов к API в секунду на клиента; 0 — без ограничения")
+	pflag.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", defaultRateLimitBurst,
+		"допустимый всплеск запросов сверх лимита")
 
 	pflag.StringVar(&cfg.S3Endpoint, "s3-endpoint", defaultS3Endpoint, "адрес S3-совместимого хранилища")
 	pflag.StringVar(&cfg.S3AccessKey, "s3-access-key", defaultS3AccessKey, "ключ доступа к хранилищу")

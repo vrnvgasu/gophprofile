@@ -1,0 +1,98 @@
+
+image:
+  repository: gophprofile
+  tag: latest
+  pullPolicy: Never
+
+server:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+app:
+  logLevel: info
+  maxUploadSize: "10485760"
+  rateLimitRPS: "20"
+  rateLimitBurst: "40"
+  s3Endpoint: gophprofile-minio:9000
+  s3Bucket: avatars
+  s3UseSSL: false
+  kafkaBrokers: gophprofile-kafka:9092
+  kafkaTopic: avatar-events
+  kafkaGroupID: avatar-worker
+  otlpEndpoint: gophprofile-otel-collector:4317
+  traceSampleRate: "1.0"
+
+secrets:
+  databaseURI: ""
+  s3AccessKey: minioadmin
+  s3SecretKey: minioadmin
+
+ingress:
+  enabled: true
+  className: nginx
+  host: avatars.local
+  maxBodySize: 10m
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUPercent: 70
+  targetMemoryPercent: 80
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  prometheusNamespace: monitoring
+
+grafanaDashboard:
+  enabled: true
+  label: grafana_dashboard
+  labelValue: "1"
+
+networkPolicy:
+  enabled: true
+  ingressNamespace: ingress-nginx
+
+migrations:
+  enabled: true
+  hooks: "post-install,post-upgrade"
+
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  db: gophprofile
+  user: gophprofile
+  password: gophprofile
+  storage: 1Gi
+
+kafka:
+  enabled: true
+  image: apache/kafka:3.9.1
+
+minio:
+  enabled: true
+  image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  storage: 2Gi
+
+otelCollector:
+  enabled: true
+  image: otel/opentelemetry-collector-contrib:0.143.0
+  jaegerEndpoint: ""
+  lokiEndpoint: ""

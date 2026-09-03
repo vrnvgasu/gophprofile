@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-config
+  labels:
+    app: gophprofile
+data:
+  RUN_ADDRESS: ":8080"
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  STATIC_DIR: "/app/web/static"
+  MAX_UPLOAD_SIZE: {{ .Values.app.maxUploadSize | quote }}
+  RATE_LIMIT_RPS: {{ .Values.app.rateLimitRPS | quote }}
+  RATE_LIMIT_BURST: {{ .Values.app.rateLimitBurst | quote }}
+  S3_ENDPOINT: {{ .Values.app.s3Endpoint | quote }}
+  S3_BUCKET: {{ .Values.app.s3Bucket | quote }}
+  S3_USE_SSL: {{ .Values.app.s3UseSSL | quote }}
+  KAFKA_BROKERS: {{ .Values.app.kafkaBrokers | quote }}
+  KAFKA_TOPIC: {{ .Values.app.kafkaTopic | quote }}
+  KAFKA_GROUP_ID: {{ .Values.app.kafkaGroupID | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.app.otlpEndpoint | quote }}
+  OTEL_TRACES_SAMPLE_RATE: {{ .Values.app.traceSampleRate | quote }}

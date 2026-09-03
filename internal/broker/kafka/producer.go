@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/plugin/kotel"
@@ -12,11 +13,16 @@ import (
 
 	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/model"
+	"github.com/vrnvgasu/gophprofile/pkg/breaker"
 )
 
+// Верхняя граница на доставку записи.
+const produceTimeout = 5 * time.Second
+
 type Producer struct {
-	client *kgo.Client
-	topic  string
+	client  *kgo.Client
+	topic   string
+	breaker *breaker.Breaker
 }
 
 func NewProducer(brokers []string, topic string) (*Producer, error) {
@@ -28,13 +34,14 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 		kgo.SeedBrokers(brokers...),
 		kgo.DefaultProduceTopic(topic),
 		kgo.AllowAutoTopicCreation(),
+		kgo.RecordDeliveryTimeout(produceTimeout),
 		kgo.WithHooks(instr.Hooks()...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka.NewProducer: %w", err)
 	}
 
-	return &Producer{client: client, topic: topic}, nil
+	return &Producer{client: client, topic: topic, breaker: breaker.New("kafka")}, nil
 }
 
 // Publish синхронно отправляет событие. Ключом сообщения служит идентификатор аватарки,
@@ -55,8 +62,14 @@ func (p *Producer) Publish(ctx context.Context, key string, event model.Event) (
 		Value: value,
 	}
 
-	if err = p.client.ProduceSync(ctx, record).FirstErr(); err != nil {
-		return fmt.Errorf("kafka.Publish ProduceSync: %w", err)
+	if err = p.breaker.Do(ctx, func() error {
+		if produceErr := p.client.ProduceSync(ctx, record).FirstErr(); produceErr != nil {
+			return fmt.Errorf("kafka.Publish ProduceSync: %w", produceErr)
+		}
+
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	return nil

@@ -10,7 +10,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var Log *slog.Logger = slog.New(discardHandler{})
+// До вызова Initialize пишем в stderr: иначе ошибки чтения конфигурации теряются и процесс падает молча.
+var Log *slog.Logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 var (
 	stdout  slog.Handler
@@ -93,10 +94,3 @@ func (f fanout) WithGroup(name string) slog.Handler {
 
 	return next
 }
-
-type discardHandler struct{}
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (h discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return h }
-func (h discardHandler) WithGroup(string) slog.Handler           { return h }

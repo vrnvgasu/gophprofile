@@ -13,6 +13,7 @@ import (
 	"github.com/vrnvgasu/gophprofile/internal/broker/kafka"
 	"github.com/vrnvgasu/gophprofile/internal/config"
 	"github.com/vrnvgasu/gophprofile/internal/handler"
+	"github.com/vrnvgasu/gophprofile/internal/handler/middleware"
 	"github.com/vrnvgasu/gophprofile/internal/logger"
 	"github.com/vrnvgasu/gophprofile/internal/metrics"
 	"github.com/vrnvgasu/gophprofile/internal/repository/postgres"
@@ -93,7 +94,8 @@ func run() error {
 
 	service := avatar.NewService(storage, objects, producer, cfg.MaxUploadSize)
 	h := handler.NewHandler(service, cfg.MaxUploadSize)
-	router := handler.NewRouter(h, cfg.StaticDir)
+	limiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
+	router := handler.NewRouter(h, cfg.StaticDir, limiter)
 
 	srv := &http.Server{
 		Addr:              cfg.RunAddress,

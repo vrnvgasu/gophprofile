@@ -1,0 +1,16 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gophprofile
+  labels:
+    app: gophprofile
+spec:
+  selector:
+    matchLabels:
+      app: gophprofile-otel-collector
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      honorLabels: true
+{{- end }}

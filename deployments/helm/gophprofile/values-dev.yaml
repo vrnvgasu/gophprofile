@@ -1,0 +1,13 @@
+
+server:
+  replicas: 1
+
+autoscaling:
+  minReplicas: 1
+  maxReplicas: 4
+
+serviceMonitor:
+  enabled: true
+
+app:
+  logLevel: debug

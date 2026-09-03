@@ -8,6 +8,7 @@ import (
 
 	"github.com/vrnvgasu/gophprofile/internal/logger"
 	"github.com/vrnvgasu/gophprofile/internal/service/avatar"
+	"github.com/vrnvgasu/gophprofile/pkg/breaker"
 )
 
 type Error struct {
@@ -53,6 +54,15 @@ func ResponseError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 
 	LogError(r, err)
+
+	if errors.Is(err, breaker.ErrOpen) {
+		JSON(w, http.StatusServiceUnavailable, Error{
+			Error:   "Service temporarily unavailable",
+			Details: "A dependency is unavailable, try again later",
+		})
+
+		return
+	}
 
 	JSON(w, http.StatusInternalServerError, Error{Error: "Internal server error"})
 }
